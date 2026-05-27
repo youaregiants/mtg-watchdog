@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Watchlist · mtg-watchdog{% endblock %}
+{% block body %}
+<h1>Watchlist</h1>
+{% if not watches %}
+  <p class="empty">No cards watched yet. <a href="/search">Add your first card →</a></p>
+{% else %}
+<table class="watch-table">
+  <thead>
+    <tr>
+      <th></th>
+      <th>Card</th>
+      <th>Set</th>
+      <th>Rarity</th>
+      <th class="num">USD</th>
+      <th class="num">Foil</th>
+      <th class="num">ATL</th>
+      <th class="num">Δ vs ATL</th>
+      <th class="num">Target</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for w in watches %}
+    <tr>
+      <td>
+        {% if w.image_uri %}
+          <img class="thumb" src="{{ w.image_uri }}" alt="{{ w.name }}" loading="lazy" />
+        {% endif %}
+      </td>
+      <td><a href="/card/{{ w.scryfall_id }}">{{ w.name }}</a></td>
+      <td><code>{{ w.set_code|upper }}</code> · #{{ w.collector_no }}</td>
+      <td>{{ w.rarity or '—' }}</td>
+      <td class="num">{% if w.usd is not none %}${{ "%.2f"|format(w.usd) }}{% else %}—{% endif %}</td>
+      <td class="num muted">{% if w.usd_foil is not none %}${{ "%.2f"|format(w.usd_foil) }}{% else %}—{% endif %}</td>
+      <td class="num">{% if w.atl_usd is not none %}${{ "%.2f"|format(w.atl_usd) }}{% else %}—{% endif %}</td>
+      <td class="num">
+        {% if w.at_atl_usd %}
+          <span class="pill pill-atl">AT ATL</span>
+        {% elif w.atl_pct_usd is not none %}
+          {{ "%+.1f"|format(w.atl_pct_usd) }}%
+        {% else %}—{% endif %}
+      </td>
+      <td class="num">{% if w.target_price is not none %}${{ "%.2f"|format(w.target_price) }}{% else %}—{% endif %}</td>
+      <td>
+        <form method="post" action="/unwatch/{{ w.scryfall_id }}" class="inline"
+              onsubmit="return confirm('Stop watching {{ w.name }}?')">
+          <button type="submit" class="link-btn danger">remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

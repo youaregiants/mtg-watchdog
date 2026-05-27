@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}{{ w.name }} · mtg-watchdog{% endblock %}
+{% block body %}
+<a class="back" href="/">← back to watchlist</a>
+<div class="card-detail">
+  {% if w.image_uri %}<img class="hero" src="{{ w.image_uri }}" alt="{{ w.name }}" />{% endif %}
+  <div>
+    <h1>{{ w.name }}</h1>
+    <p><code>{{ w.set_code|upper }}</code> · {{ w.set_name }} · #{{ w.collector_no }} · {{ w.rarity }}</p>
+    {% if w.scryfall_uri %}<p><a href="{{ w.scryfall_uri }}" target="_blank" rel="noopener">View on Scryfall →</a></p>{% endif %}
+    <table class="stat-table">
+      <tr>
+        <th>Target&nbsp;(USD)</th>
+        <td>
+          <form method="post" action="/set-target/{{ w.scryfall_id }}" class="inline-edit-form">
+            <input type="number" step="0.01" min="0" name="target_price"
+                   value="{{ '%.2f'|format(w.target_price) if w.target_price is not none else '' }}"
+                   placeholder="none" class="inline-edit-input" />
+            <button type="submit" class="link-btn">save</button>
+            {% if w.target_price is not none %}
+              <button type="submit" name="target_price" value="" class="link-btn muted" title="Clear target">clear</button>
+            {% endif %}
+          </form>
+        </td>
+      </tr>
+      <tr><th>ATL (USD)</th>      <td>{% if atl_usd    is not none %}${{ "%.2f"|format(atl_usd)    }}{% else %}—{% endif %}</td></tr>
+      <tr><th>ATL (foil)</th>     <td>{% if atl_foil   is not none %}${{ "%.2f"|format(atl_foil)   }}{% else %}—{% endif %}</td></tr>
+      <tr><th>ATL (etched)</th>   <td>{% if atl_etched is not none %}${{ "%.2f"|format(atl_etched) }}{% else %}—{% endif %}</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2>Price history</h2>
+<div class="chart-wrap">
+  <canvas id="chart"></canvas>
+</div>
+
+<h3>Recent observations</h3>
+<table class="watch-table compact">
+  <thead><tr><th>Observed</th><th class="num">USD</th><th class="num">Foil</th><th class="num">Etched</th></tr></thead>
+  <tbody>
+    {% for h in history[:30] %}
+    <tr>
+      <td>{{ h.observed_at[:19].replace('T',' ') }}</td>
+      <td class="num">{% if h.usd        is not none %}${{ "%.2f"|format(h.usd)        }}{% else %}—{% endif %}</td>
+      <td class="num">{% if h.usd_foil   is not none %}${{ "%.2f"|format(h.usd_foil)   }}{% else %}—{% endif %}</td>
+      <td class="num">{% if h.usd_etched is not none %}${{ "%.2f"|format(h.usd_etched) }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<script>
+  const data = {{ chart_data_json|safe }};
+  (function () {
+    const wrap = document.querySelector('.chart-wrap');
+    const c = document.getElementById('chart');
+    if (!c || !data.labels.length) return;
+
+    function draw() {
+      const W = wrap.clientWidth || 800;
+      const H = Math.max(220, Math.round(W * 0.32));
+      c.width = W; c.height = H;
+      const pad = { top: 24, right: 80, bottom: 32, left: 56 };
+      const ctx = c.getContext('2d');
+      ctx.clearRect(0, 0, W, H);
+
+      const series = [
+        { color: '#3b82f6', vals: data.usd,        label: 'USD' },
+        { color: '#f59e0b', vals: data.usd_foil,   label: 'foil' },
+        { color: '#10b981', vals: data.usd_etched, label: 'etched' },
+      ].filter(s => s.vals.some(v => v !== null && v !== undefined));
+      if (!series.length) return;
+
+      const all = series.flatMap(s => s.vals.filter(v => v !== null && v !== undefined));
+      const min = Math.min(...all), max = Math.max(...all);
+      const range = (max - min) || 1;
+      const n = data.labels.length;
+      const iW = W - pad.left - pad.right;
+      const iH = H - pad.top - pad.bottom;
+
+      const xOf = i => pad.left + (i / Math.max(n - 1, 1)) * iW;
+      const yOf = v => pad.top + (1 - (v - min) / range) * iH;
+
+      // grid lines
+      const steps = 4;
+      ctx.strokeStyle = '#262b36'; ctx.lineWidth = 1;
+      for (let i = 0; i <= steps; i++) {
+        const y = pad.top + (i / steps) * iH;
+        ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+        const val = max - (i / steps) * range;
+        ctx.fillStyle = '#8b94a6'; ctx.font = '11px system-ui';
+        ctx.textAlign = 'right';
+        ctx.fillText('$' + val.toFixed(2), pad.left - 6, y + 4);
+      }
+
+      // x-axis labels (first + last + a few in between)
+      ctx.textAlign = 'center'; ctx.fillStyle = '#8b94a6'; ctx.font = '11px system-ui';
+      const labelIdxs = [0, Math.floor(n / 3), Math.floor(2 * n / 3), n - 1]
+        .filter((v, i, a) => a.indexOf(v) === i && v >= 0 && v < n);
+      labelIdxs.forEach(i => {
+        ctx.fillText(data.labels[i], xOf(i), H - pad.bottom + 16);
+      });
+
+      // axes
+      ctx.strokeStyle = '#444'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, H - pad.bottom);
+      ctx.lineTo(W - pad.right, H - pad.bottom);
+      ctx.stroke();
+
+      // series lines
+      series.forEach((s, si) => {
+        ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+        ctx.beginPath();
+        let started = false;
+        s.vals.forEach((v, idx) => {
+          if (v === null || v === undefined) { started = false; return; }
+          const x = xOf(idx), y = yOf(v);
+          if (!started) { ctx.moveTo(x, y); started = true; }
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        // legend
+        ctx.fillStyle = s.color; ctx.textAlign = 'left'; ctx.font = 'bold 11px system-ui';
+        ctx.fillText(s.label, W - pad.right + 8, pad.top + 14 + si * 18);
+      });
+    }
+
+    draw();
+    window.addEventListener('resize', draw);
+  })();
+</script>
+{% endblock %}

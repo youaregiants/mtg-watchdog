@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Alerts · mtg-watchdog{% endblock %}
+{% block body %}
+<h1>Alerts</h1>
+{% if not alerts %}
+  <p class="empty">No alerts yet. They'll appear here when a watched card hits an all-time low, your target, or drops &gt;10% day-over-day.</p>
+{% else %}
+<ul class="alert-list">
+  {% for a in alerts %}
+  <li class="alert alert-{{ a.kind }}">
+    {% if a.image_uri %}<img src="{{ a.image_uri }}" alt="" loading="lazy" />{% endif %}
+    <div>
+      <div class="alert-head">
+        <a href="/card/{{ a.scryfall_id }}"><strong>{{ a.name }}</strong></a>
+        <code>{{ a.set_code|upper }}</code>
+        <span class="pill pill-{{ a.kind }}">{{ a.kind }}</span>
+      </div>
+      <div>{{ a.message }}</div>
+      <small>{{ a.created_at[:19].replace('T',' ') }} UTC</small>
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

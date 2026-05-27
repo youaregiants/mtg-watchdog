@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Add card · mtg-watchdog{% endblock %}
+{% block body %}
+<h1>Add a card</h1>
+<form method="get" action="/search" class="search-form">
+  <input type="text" name="q" value="{{ q }}" autofocus
+         placeholder='e.g. "Lightning Bolt set:lea" or "Ragavan"' />
+  <button type="submit">Search Scryfall</button>
+</form>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if q and not results and not error %}
+  <p class="empty">No cards matched <code>{{ q }}</code>.</p>
+{% endif %}
+{% if results %}
+<div class="results">
+  {% for c in results %}
+  <div class="result-card">
+    {% set img = c.image_uris.normal if c.image_uris else (c.card_faces[0].image_uris.normal if c.card_faces else '') %}
+    {% if img %}<img src="{{ img }}" alt="{{ c.name }}" loading="lazy" />{% endif %}
+    <div class="meta">
+      <strong>{{ c.name }}</strong><br />
+      <code>{{ c.set|upper }}</code> · {{ c.set_name }} · #{{ c.collector_number }}<br />
+      <small>{{ c.rarity }}</small><br />
+      {% if c.prices.usd %}<span>USD ${{ c.prices.usd }}</span>{% endif %}
+      {% if c.prices.usd_foil %} · <span>foil ${{ c.prices.usd_foil }}</span>{% endif %}
+    </div>
+    <form method="post" action="/watch" class="watch-form">
+      <input type="hidden" name="scryfall_id" value="{{ c.id }}" />
+      <input type="number" step="0.01" name="target_price" placeholder="Target $ (optional)" />
+      <button type="submit">Watch</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

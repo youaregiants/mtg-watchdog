@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}mtg-watchdog{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">mtg-watchdog</a>
+    <nav>
+      <a href="/">Watchlist</a>
+      <a href="/search">Add card</a>
+      <a href="/alerts">
+        Alerts
+        {% if unseen_alerts %}<span class="badge">{{ unseen_alerts }}</span>{% endif %}
+      </a>
+      <form method="post" action="/refresh" class="inline">
+        <button type="submit" class="link-btn" title="Re-poll Scryfall for every watched card">Refresh now</button>
+      </form>
+    </nav>
+  </header>
+  <main>{% block body %}{% endblock %}</main>
+  <footer>
+    <span>Prices via <a href="https://scryfall.com" target="_blank" rel="noopener">Scryfall</a>. Local-only. No tracking.</span>
+  </footer>
+</body>
+</html>

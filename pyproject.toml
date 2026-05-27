@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mtg-watchdog"
+version = "0.1.0"
+description = "Price watchdog for individual Magic: The Gathering cards"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "jinja2>=3.1",
+  "httpx>=0.27",
+  "apscheduler>=3.10",
+  "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+mtg-watchdog = "mtg_watchdog.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mtg_watchdog = ["templates/*.html", "static/*"]
