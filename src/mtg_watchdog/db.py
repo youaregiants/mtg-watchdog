@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS sealed_products (
     valuation_kind    TEXT,
     tcgplayer_url     TEXT,
     card_kingdom_url  TEXT,
+    tcg_product_id    TEXT,
+    tcg_retail_usd    REAL,
+    ck_retail_usd     REAL,
     updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sealed_floor    ON sealed_products(floor_usd DESC);
@@ -79,7 +82,8 @@ def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
         # Idempotent column migrations for sealed_products
-        for col in ("tcgplayer_url TEXT", "card_kingdom_url TEXT"):
+        for col in ("tcgplayer_url TEXT", "card_kingdom_url TEXT",
+                    "tcg_product_id TEXT", "tcg_retail_usd REAL", "ck_retail_usd REAL"):
             try:
                 conn.execute(f"ALTER TABLE sealed_products ADD COLUMN {col}")
             except Exception:
@@ -291,10 +295,10 @@ def upsert_sealed_product(row: dict) -> None:
             INSERT INTO sealed_products
               (uuid, name, set_code, set_name, category, release_date,
                floor_usd, ev_usd, ceiling_usd, card_count, valuation_kind,
-               tcgplayer_url, card_kingdom_url, updated_at)
+               tcgplayer_url, card_kingdom_url, tcg_product_id, updated_at)
             VALUES (:uuid, :name, :set_code, :set_name, :category, :release_date,
                :floor_usd, :ev_usd, :ceiling_usd, :card_count, :valuation_kind,
-               :tcgplayer_url, :card_kingdom_url, :updated_at)
+               :tcgplayer_url, :card_kingdom_url, :tcg_product_id, :updated_at)
             ON CONFLICT(uuid) DO UPDATE SET
               name=excluded.name, set_name=excluded.set_name,
               floor_usd=excluded.floor_usd, ev_usd=excluded.ev_usd,
@@ -302,6 +306,7 @@ def upsert_sealed_product(row: dict) -> None:
               valuation_kind=excluded.valuation_kind,
               tcgplayer_url=excluded.tcgplayer_url,
               card_kingdom_url=excluded.card_kingdom_url,
+              tcg_product_id=excluded.tcg_product_id,
               updated_at=excluded.updated_at
             """,
             row,
@@ -338,3 +343,12 @@ def sealed_last_synced() -> Optional[str]:
             "SELECT MAX(updated_at) AS t FROM sealed_products"
         ).fetchone()
         return row["t"] if row else None
+
+
+def bulk_update_sealed_retail(rows: list) -> None:
+    """rows: [(uuid, tcg_retail_usd, ck_retail_usd), ...]"""
+    with connect() as conn:
+        conn.executemany(
+            "UPDATE sealed_products SET tcg_retail_usd=?, ck_retail_usd=? WHERE uuid=?",
+            [(tcg, ck, uuid) for uuid, tcg, ck in rows],
+        )

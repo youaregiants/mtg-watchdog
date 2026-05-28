@@ -48,6 +48,9 @@ SCRYFALL_BULK_INDEX = "https://api.scryfall.com/bulk-data"
 MTGJSON_SET_LIST = "https://mtgjson.com/api/v5/SetList.json"
 MTGJSON_SET_URL = "https://mtgjson.com/api/v5/{code}.json"
 
+TCGCSV_GROUPS_URL = "https://tcgcsv.com/tcgplayer/1/groups"
+TCGCSV_PRICES_URL = "https://tcgcsv.com/tcgplayer/1/{group_id}/prices"
+
 CUTOFF_DATE = "2020-01-01"
 
 FOCUS_CATEGORIES = {
@@ -393,6 +396,77 @@ def _purchase_urls(product: dict) -> tuple[Optional[str], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Retail price fetch from tcgcsv.com (public TCGPlayer price mirror)
+# ---------------------------------------------------------------------------
+
+def sync_tcg_retail_prices(focus: dict) -> list:
+    """Fetch TCGPlayer market prices via tcgcsv.com.
+
+    Returns [(uuid, tcg_retail_usd, ck_retail_usd), ...]
+    ck_retail_usd is always None (no public CK price API).
+    """
+    import time
+
+    pid_to_uuid: dict[int, str] = {}
+    for uuid, p in focus.items():
+        pid = p.get("tcg_product_id")
+        if pid:
+            try:
+                pid_to_uuid[int(pid)] = uuid
+            except (TypeError, ValueError):
+                pass
+
+    if not pid_to_uuid:
+        log.info("retail prices: no TCGPlayer product IDs; skipping")
+        return []
+
+    log.info("retail prices: %d products with TCG IDs", len(pid_to_uuid))
+
+    with _client() as c:
+        resp = c.get(TCGCSV_GROUPS_URL)
+        resp.raise_for_status()
+        all_groups = resp.json().get("results", [])
+
+    abbr_to_gid = {
+        g["abbreviation"].upper(): g["groupId"]
+        for g in all_groups if g.get("abbreviation")
+    }
+
+    needed_codes = {p["set_code"].upper() for p in focus.values() if p.get("tcg_product_id")}
+    group_ids = {abbr_to_gid[code] for code in needed_codes if code in abbr_to_gid}
+    missed = needed_codes - set(abbr_to_gid.keys())
+    if missed:
+        log.debug("retail prices: no TCGPlayer group for sets: %s", sorted(missed))
+
+    log.info("retail prices: fetching %d group price lists", len(group_ids))
+    price_by_pid: dict[int, float] = {}
+    with _client() as c:
+        for gid in group_ids:
+            try:
+                resp = c.get(TCGCSV_PRICES_URL.format(group_id=gid))
+                resp.raise_for_status()
+                for entry in resp.json().get("results", []):
+                    pid = entry.get("productId")
+                    market = entry.get("marketPrice")
+                    if pid and entry.get("subTypeName") == "Normal" and market is not None:
+                        price_by_pid[int(pid)] = float(market)
+            except Exception:
+                log.warning("retail prices: failed for group %d", gid)
+            time.sleep(0.15)
+
+    log.info("retail prices: %d total product prices fetched", len(price_by_pid))
+
+    results = []
+    for pid, uuid in pid_to_uuid.items():
+        market = price_by_pid.get(pid)
+        results.append((uuid, market, None))
+
+    matched = sum(1 for _, m, _ in results if m is not None)
+    log.info("retail prices: matched %d / %d", matched, len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Main sync entry point
 # ---------------------------------------------------------------------------
 
@@ -424,6 +498,7 @@ def run_sync(force_download: bool = False) -> dict:
             if not uuid:
                 continue
             tcg_url, ck_url = _purchase_urls(p)
+            ids = p.get("identifiers") or {}
             all_products[uuid] = {
                 "uuid": uuid,
                 "name": p.get("name", ""),
@@ -433,6 +508,7 @@ def run_sync(force_download: bool = False) -> dict:
                 "contents": p.get("contents") or {},
                 "tcgplayer_url": tcg_url,
                 "card_kingdom_url": ck_url,
+                "tcg_product_id": ids.get("tcgplayerProductId"),
             }
 
     log.info("Total products in catalogue: %d", len(all_products))
@@ -494,10 +570,23 @@ def run_sync(force_download: bool = False) -> dict:
             "valuation_kind": val.kind,
             "tcgplayer_url": p.get("tcgplayer_url"),
             "card_kingdom_url": p.get("card_kingdom_url"),
+            "tcg_product_id": p.get("tcg_product_id"),
             "updated_at": db.now_iso(),
         })
         written += 1
 
     stats.update({"written": written, "skipped_no_contents": skipped, "errors": errors})
+
+    # --- Step 5: Retail prices from tcgcsv.com ---
+    log.info("=== Step 5/5: Retail prices (tcgcsv.com) ===")
+    try:
+        retail_rows = sync_tcg_retail_prices(focus)
+        if retail_rows:
+            db.bulk_update_sealed_retail(retail_rows)
+            matched = sum(1 for _, m, _ in retail_rows if m is not None)
+            stats["retail_prices_matched"] = matched
+    except Exception:
+        log.exception("Retail price sync failed (non-fatal)")
+
     log.info("=== Sealed sync complete: %s ===", stats)
     return stats

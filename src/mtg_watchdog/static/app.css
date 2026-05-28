@@ -157,6 +157,12 @@ form.search-form button:hover, .watch-form button:hover { filter: brightness(1.1
 .empty-state pre { background: var(--bg); padding: 8px 12px; border-radius: 4px;
   font-size: 13px; margin: 8px 0; }
 
+.retail-price { font-variant-numeric: tabular-nums; }
+.val-pct { font-weight: 600; font-variant-numeric: tabular-nums; }
+.val-high { color: var(--good); }
+.val-mid  { color: var(--warn); }
+.val-low  { color: var(--muted); }
+
 .alert-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .alert {
   display: flex; gap: 12px; padding: 12px; background: var(--panel);

@@ -50,6 +50,9 @@
       <th class="num">Floor $</th>
       <th class="num">EV $</th>
       <th class="num">Ceiling $</th>
+      <th class="num">TCG Retail</th>
+      <th class="num">CK Retail</th>
+      <th class="num">Value %</th>
       <th class="num">Cards</th>
       <th>Buy</th>
     </tr>
@@ -83,6 +86,17 @@
       </td>
       <td class="num">{% if p.ev_usd %}${{ "%.2f"|format(p.ev_usd) }}{% else %}—{% endif %}</td>
       <td class="num muted">{% if p.ceiling_usd %}${{ "%.2f"|format(p.ceiling_usd) }}{% else %}—{% endif %}</td>
+      <td class="num">{% if p.tcg_retail_usd %}<span class="retail-price">${{ "%.2f"|format(p.tcg_retail_usd) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="num">{% if p.ck_retail_usd %}<span class="retail-price">${{ "%.2f"|format(p.ck_retail_usd) }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="num">
+        {%- set retail_min = [p.tcg_retail_usd or 9999999, p.ck_retail_usd or 9999999] | min -%}
+        {%- if p.floor_usd and retail_min < 9999999 -%}
+          {%- set pct = (p.floor_usd / retail_min * 100) | round(0) | int -%}
+          <span class="val-pct {% if pct >= 80 %}val-high{% elif pct >= 50 %}val-mid{% else %}val-low{% endif %}">{{ pct }}%</span>
+        {%- else -%}
+          <span class="muted">—</span>
+        {%- endif -%}
+      </td>
       <td class="num muted">{{ p.card_count or '—' }}</td>
       <td class="buy-links">
         {% if p.tcgplayer_url %}
