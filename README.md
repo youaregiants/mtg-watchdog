@@ -1,20 +1,36 @@
 # mtg-watchdog
 
-A local price-alert dashboard for individual **Magic: The Gathering** cards.
+A local price-alert dashboard for individual **Magic: The Gathering** cards,
+plus a nightly sealed-product EV tracker that shows which sealed products have
+the highest **guaranteed** single-card value.
 
-Search any printing on Scryfall, set an optional target price, and the built-in
-refresh worker polls Scryfall every 12 hours, records a price snapshot, and
-raises an alert when a card:
+No accounts, no cloud, no API keys — FastAPI web app + SQLite.
 
-- hits a **new all-time low (ATL)** since you started watching it
-- crosses your **target price** from above
-- drops **>10 % day-over-day** in any finish (USD, foil, etched)
+Live at **https://watchdog.62-238-41-219.sslip.io**
 
-No accounts, no cloud, no API keys — just a local FastAPI web app backed by one
-SQLite file.
+---
 
-> Sibling project: [mtg-sealed-value](https://github.com/youaregiants/mtg-sealed-value)
-> tracks sealed product EV; this one tracks individual card prices.
+## Features
+
+### Card watchlist
+- Search any printing via Scryfall full syntax (`"Ragavan set:mh2"`, `t:planeswalker`, etc.)
+- Watch any printing; set an optional target price (editable any time from the card detail page)
+- **All-time-low (ATL)** alert when a card hits a new price floor since you started watching
+- **Target-hit** alert when USD price drops to or below your target
+- **Drop alert** when price falls ≥ 10 % day-over-day in any finish (USD / foil / etched)
+- Per-card responsive price-history chart (USD, foil, etched), 365-day rolling window
+- Nightly price refresh via cron at **03:30 UTC** (`mtg-watchdog refresh`)
+
+### Sealed product EV (`/sealed`)
+- Downloads Scryfall bulk prices + MTGJSON booster blueprints nightly (02:00 UTC)
+- Covers **102+ sets** since 2020, **1 000+ products**: booster boxes, bundles,
+  commander decks, booster packs, prerelease packs, draft sets
+- Three value columns per product:
+  - **Floor $** — guaranteed minimum: worst-case pull from every booster slot
+  - **EV $** — probability-weighted expected value
+  - **Ceiling $** — best-case pull
+- Ranked by floor (highest guaranteed value first); filterable by product category
+- All values based solely on **current Scryfall prices** — no stale estimates
 
 ---
 
@@ -23,38 +39,41 @@ SQLite file.
 ```bash
 git clone https://github.com/youaregiants/mtg-watchdog.git
 cd mtg-watchdog
-python3 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-pip install -e .
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt && pip install -e .
 mtg-watchdog serve              # → http://localhost:8000
 ```
 
-On first boot the database is created automatically and seeded with **5 iconic
-demo cards** (Lightning Bolt LEA, Ragavan MH3, Orcish Bowmasters, Sheoldred DMU,
-Counterspell LEA) plus **30 days of synthetic price history** so the dashboard
-and charts are immediately useful.
+The DB is created automatically on first boot with no demo data.
 
-### Alternative launch (uvicorn directly)
+### First sealed sync (5–15 min, one time)
 
 ```bash
-uvicorn mtg_watchdog.main:app --reload --port 8000
+mtg-watchdog sync-sealed
 ```
+
+This downloads ~120 MB from Scryfall and ~50 MB from MTGJSON (per-set files are
+cached permanently; subsequent nightly runs only re-download Scryfall bulk and
+re-compute valuations, taking ~3–5 min).
 
 ---
 
-## Features
+## CLI
 
-| Feature | Detail |
-|---------|--------|
-| **Watchlist** | Table of every watched card: thumbnail, current USD & foil prices, ATL, Δ vs ATL, target price |
-| **Search** | Full Scryfall syntax — `"Ragavan set:mh2"`, `t:planeswalker cmc=4`, etc. Returns up to 20 printings with images and prices |
-| **Watch / Unwatch** | Add any printing to the watchlist; set an optional target price at add time or edit it later |
-| **Edit target price** | Update or clear a card's target price at any time from its detail page |
-| **Price history chart** | Responsive line chart (USD / foil / etched) with up to 365 data points per card |
-| **Alert feed** | Chronological list of ATL, target-hit, and drop alerts with unseen badge count |
-| **Auto-refresh** | Background job polls Scryfall every 12 hours (polite 100 ms delay between cards) |
-| **Manual refresh** | "Refresh now" in the nav bar re-polls all watched cards immediately |
+```bash
+mtg-watchdog serve                            # web UI on :8000
+mtg-watchdog serve --host 0.0.0.0 --port 9000 --reload
+
+mtg-watchdog refresh                          # re-poll Scryfall for all watched cards
+mtg-watchdog sync-sealed                      # full sealed EV sync
+mtg-watchdog sync-sealed --force              # re-download cached files too
+
+mtg-watchdog add "Ragavan set:mh2"
+mtg-watchdog add "Sheoldred, the Apocalypse" --target 40.00
+mtg-watchdog list
+mtg-watchdog remove <scryfall_id>
+mtg-watchdog init                             # initialise / migrate the DB
+```
 
 ---
 
@@ -62,94 +81,81 @@ uvicorn mtg_watchdog.main:app --reload --port 8000
 
 | Path | What it shows |
 |------|---------------|
-| `/` | Watchlist: current prices, ATL, foil, and Δ for every watched card |
-| `/card/{scryfall_id}` | Detail: editable target price, ATL across all finishes, responsive chart, price-history table |
-| `/search?q=…` | Scryfall search results with Watch button per printing |
-| `/alerts` | Alert feed; visiting the page marks all alerts as seen |
+| `/` | Watchlist with USD, foil, ATL, Δ vs ATL, target price |
+| `/card/{id}` | Detail: editable target, ATL per finish, responsive chart, history table |
+| `/search?q=…` | Scryfall results with Watch button per printing |
+| `/alerts` | Chronological alert feed (ATL / target-hit / drop) |
+| `/sealed?category=…` | Sealed EV ranked by floor; filterable by category |
 
 ---
 
-## CLI
+## Cron schedule
 
-```bash
-# First-time setup (also happens automatically on serve)
-mtg-watchdog init
+```
+/etc/cron.d/mtg-watchdog
 
-# Launch the web UI
-mtg-watchdog serve                          # http://localhost:8000
-mtg-watchdog serve --port 9000 --host 0.0.0.0   # custom host/port
-mtg-watchdog serve --reload                # auto-reload on code changes
-
-# Add cards from the command line
-mtg-watchdog add "Ragavan set:mh2"
-mtg-watchdog add "Sheoldred, the Apocalypse" --target 40.00
-mtg-watchdog add "Lightning Bolt set:lea"
-
-# List all watched cards + latest prices
-mtg-watchdog list
-
-# Trigger a price refresh right now
-mtg-watchdog refresh
-
-# Remove a watch (use the scryfall_id from mtg-watchdog list)
-mtg-watchdog remove <scryfall_id>
+0  2 * * *  mtg-watchdog sync-sealed   # Scryfall bulk + MTGJSON → sealed EV
+30 3 * * *  mtg-watchdog refresh       # watchlist price refresh + alert check
 ```
 
 ---
 
 ## Alert types
 
-| Kind | When it fires |
-|------|---------------|
-| `atl` | New all-time low recorded for a finish, **after** the first observation (so adding a card never fires immediately) |
-| `target` | USD price moves at or below your target price from above |
-| `drop` | Price falls ≥ 10 % vs. the previous observation in any finish |
+| Kind | Trigger |
+|------|---------|
+| `atl` | New all-time low for a finish (after the first observation) |
+| `target` | USD crosses from above to at-or-below your target |
+| `drop` | ≥ 10 % single-day drop in any finish |
 
 ---
 
 ## Architecture
 
 ```
-   ┌─────────────────────────┐
-   │  Scryfall API           │  HTTPS, no auth required
-   │  /cards/search          │
-   │  /cards/{id}            │
-   └───────────┬─────────────┘
-               │  httpx (100 ms delay, 12 h interval)
-               ▼
-   ┌─────────────────────────┐
-   │  refresh.py             │  diff prices → raise alerts
-   └───────────┬─────────────┘
-               ▼
-   ┌─────────────────────────┐
-   │  SQLite                 │  watches, price_history, alerts
-   │  data/watchdog.db       │
-   └───────────┬─────────────┘
-               ▼
-   ┌─────────────────────────┐
-   │  FastAPI + Jinja2       │  templates/ + static/app.css
-   │  APScheduler (12 h)     │
-   └─────────────────────────┘
+   ┌──────────────────────┐   ┌────────────────────────┐
+   │  Scryfall API        │   │  MTGJSON API           │
+   │  /cards/search       │   │  SetList.json          │
+   │  /cards/{id}         │   │  per-set {CODE}.json   │
+   │  bulk default-cards  │   │  (cached permanently)  │
+   └──────────┬───────────┘   └──────────┬─────────────┘
+              │                          │
+              ▼                          ▼
+   ┌──────────────────────────────────────────────────┐
+   │  refresh.py          sealed_sync.py              │
+   │  (watchlist prices)  (booster EV math)           │
+   └──────────────────────────┬───────────────────────┘
+                              ▼
+   ┌──────────────────────────────────────────────────┐
+   │  SQLite  data/watchdog.db                        │
+   │  watches · price_history · alerts                │
+   │  sealed_products                                 │
+   └──────────────────────────┬───────────────────────┘
+                              ▼
+   ┌──────────────────────────────────────────────────┐
+   │  FastAPI + Jinja2 · APScheduler                  │
+   │  templates/ · static/app.css                     │
+   └──────────────────────────────────────────────────┘
 ```
 
 ### Source layout
 
 ```
 src/mtg_watchdog/
-├── main.py          # FastAPI routes + APScheduler setup
-├── db.py            # SQLite repository (watches, prices, alerts)
-├── scryfall.py      # Scryfall API client (httpx, no auth)
-├── refresh.py       # Price refresh + alert logic
-├── seed.py          # Demo data seeder (runs once on empty DB)
-├── cli.py           # argparse entry point (mtg-watchdog command)
-├── templates/       # Jinja2 HTML templates
+├── main.py          # FastAPI routes
+├── db.py            # SQLite repository
+├── scryfall.py      # Scryfall card search + price fetch
+├── refresh.py       # Watchlist price refresh + alert logic
+├── sealed_sync.py   # Nightly sealed EV sync (Scryfall bulk + MTGJSON)
+├── cli.py           # CLI entry point
+├── templates/
 │   ├── base.html
 │   ├── index.html   # watchlist
 │   ├── card.html    # per-card detail + chart
-│   ├── search.html  # Scryfall search
-│   └── alerts.html  # alert feed
-└── static/
-    └── app.css      # dark-mode CSS, no external dependencies
+│   ├── search.html
+│   ├── alerts.html
+│   └── sealed.html  # sealed EV ranking
+└── static/app.css
 ```
 
 ---
@@ -157,64 +163,23 @@ src/mtg_watchdog/
 ## Database schema
 
 ```sql
--- Every card you're watching
-watches(
-    scryfall_id   TEXT PRIMARY KEY,
-    name, set_code, set_name, collector_no, rarity,
-    image_uri, scryfall_uri,
-    target_price  REAL,        -- NULL = no target
-    added_at      TEXT         -- ISO 8601 UTC
-)
+watches(scryfall_id PK, name, set_code, set_name, collector_no, rarity,
+        image_uri, scryfall_uri, target_price, added_at)
 
--- One row per card per refresh (up to 365 days shown in chart)
-price_history(
-    scryfall_id  TEXT,
-    observed_at  TEXT,         -- ISO 8601 UTC
-    usd          REAL,
-    usd_foil     REAL,
-    usd_etched   REAL,
-    PRIMARY KEY (scryfall_id, observed_at)
-)
+price_history(scryfall_id, observed_at, usd, usd_foil, usd_etched)
 
--- Alert events
-alerts(
-    id           INTEGER PRIMARY KEY,
-    scryfall_id  TEXT,
-    kind         TEXT,         -- 'atl' | 'target' | 'drop'
-    finish       TEXT,         -- 'usd' | 'usd_foil' | 'usd_etched'
-    price        REAL,
-    prev_price   REAL,
-    message      TEXT,
-    created_at   TEXT,
-    seen         INTEGER DEFAULT 0
-)
+alerts(id, scryfall_id, kind, finish, price, prev_price, message, created_at, seen)
+
+sealed_products(uuid PK, name, set_code, set_name, category, release_date,
+                floor_usd, ev_usd, ceiling_usd, card_count, valuation_kind, updated_at)
 ```
 
 ---
 
-## Development
+## Data sources
 
-```bash
-# Install in editable mode with dev deps
-pip install -e .
-
-# Auto-reload server (templates and static files reload instantly)
-mtg-watchdog serve --reload
-
-# Wipe the DB and start fresh with demo data
-rm data/watchdog.db && mtg-watchdog init
-```
-
-The DB file lives at `data/watchdog.db` (git-ignored). Delete it at any time to
-reset to the seeded demo state.
-
----
-
-## Data source
-
-**[Scryfall API](https://scryfall.com/docs/api)** — card metadata and prices in
-USD / USD foil / USD etched. Free, no API key required. The refresh worker
-sleeps 100 ms between requests to stay within Scryfall's soft 10 rps cap.
+- **[Scryfall](https://scryfall.com/docs/api)** — card metadata + USD prices (free, no key)
+- **[MTGJSON](https://mtgjson.com/api/v5/)** — booster blueprints + sealed product definitions (free, no key)
 
 ---
 
