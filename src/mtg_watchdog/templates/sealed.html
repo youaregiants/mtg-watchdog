@@ -4,21 +4,20 @@
 <div class="page-head">
   <h1>Sealed Product Value</h1>
   <p class="muted">
-    Ranked by <strong>floor</strong> — the guaranteed minimum single-card value from opening the product,
-    based on the worst-case pull from each booster slot using current Scryfall prices.
-    EV = probability-weighted expected value. Ceiling = best possible pull.
+    Ranked by <strong>floor</strong> — the guaranteed minimum single-card value assuming
+    worst-case pulls, using current Scryfall prices.
+    EV = probability-weighted expected value. Ceiling = best-case.
   </p>
 </div>
 
 {% if last_synced %}
   <p class="muted small">Last synced: {{ last_synced[:19].replace('T',' ') }} UTC
-    &nbsp;·&nbsp; Next sync: nightly at 02:00 UTC
-    &nbsp;·&nbsp; <code>mtg-watchdog sync-sealed --force</code> to refresh now</p>
+    &nbsp;·&nbsp; Next sync: nightly at 02:00 UTC</p>
 {% else %}
   <div class="empty-state">
     <p>No sealed data yet. Run the initial sync:</p>
     <pre>mtg-watchdog sync-sealed</pre>
-    <p class="muted small">First run downloads ~200 MB from Scryfall + MTGJSON and takes 5–15 minutes.</p>
+    <p class="muted small">First run downloads ~200 MB and takes 5–15 minutes.</p>
   </div>
 {% endif %}
 
@@ -27,8 +26,15 @@
   <span class="muted small">Filter:</span>
   <a class="pill {% if not selected_category %}pill-active{% endif %}" href="/sealed">All</a>
   {% for cat in categories %}
-  <a class="pill {% if selected_category == cat %}pill-active{% endif %}"
-     href="/sealed?category={{ cat }}">{{ cat.replace('_',' ') }}</a>
+  <a class="pill pill-{{ cat }} {% if selected_category == cat %}pill-active{% endif %}"
+     href="/sealed?category={{ cat }}">
+    {% if cat == 'deck' %}Precon Decks
+    {% elif cat == 'multiple_decks' %}Deck Sets
+    {% elif cat == 'booster_box' %}Booster Boxes
+    {% elif cat == 'booster_pack' %}Booster Packs
+    {% elif cat == 'bundle' %}Bundles
+    {% else %}{{ cat.replace('_',' ').title() }}{% endif %}
+  </a>
   {% endfor %}
 </div>
 {% endif %}
@@ -45,6 +51,7 @@
       <th class="num">EV $</th>
       <th class="num">Ceiling $</th>
       <th class="num">Cards</th>
+      <th>Buy</th>
     </tr>
   </thead>
   <tbody>
@@ -55,9 +62,18 @@
       <td class="muted small">
         <code>{{ p.set_code }}</code>
         {% if p.set_name %}<span>· {{ p.set_name }}</span>{% endif %}
-        {% if p.release_date %}<span class="muted">· {{ p.release_date[:4] }}</span>{% endif %}
+        {% if p.release_date %}<span class="muted">{{ p.release_date[:4] }}</span>{% endif %}
       </td>
-      <td><span class="pill pill-{{ p.category or 'other' }}">{{ (p.category or 'other').replace('_',' ') }}</span></td>
+      <td>
+        <span class="pill pill-{{ p.category or 'other' }}">
+          {% if p.category == 'deck' %}Precon
+          {% elif p.category == 'multiple_decks' %}Deck Set
+          {% elif p.category == 'booster_box' %}Box
+          {% elif p.category == 'booster_pack' %}Pack
+          {% elif p.category == 'bundle' %}Bundle
+          {% else %}{{ (p.category or 'other').replace('_',' ') }}{% endif %}
+        </span>
+      </td>
       <td class="num">
         {% if p.floor_usd %}
           <span class="floor-val {% if p.floor_usd >= 100 %}floor-high{% elif p.floor_usd >= 40 %}floor-mid{% endif %}">
@@ -68,6 +84,14 @@
       <td class="num">{% if p.ev_usd %}${{ "%.2f"|format(p.ev_usd) }}{% else %}—{% endif %}</td>
       <td class="num muted">{% if p.ceiling_usd %}${{ "%.2f"|format(p.ceiling_usd) }}{% else %}—{% endif %}</td>
       <td class="num muted">{{ p.card_count or '—' }}</td>
+      <td class="buy-links">
+        {% if p.tcgplayer_url %}
+          <a href="{{ p.tcgplayer_url }}" target="_blank" rel="noopener" class="buy-pill tcg" title="TCGPlayer">TCG</a>
+        {% endif %}
+        {% if p.card_kingdom_url %}
+          <a href="{{ p.card_kingdom_url }}" target="_blank" rel="noopener" class="buy-pill ck" title="Card Kingdom">CK</a>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

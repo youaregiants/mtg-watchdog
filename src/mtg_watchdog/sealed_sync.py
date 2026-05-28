@@ -2,14 +2,15 @@
 
 Data flow:
   1. Scryfall default-cards bulk → {scryfall_id: (usd, usd_foil)}
-  2. MTGJSON SetList.json → which sets have sealed products + release dates
-  3. Per-set MTGJSON (cached) → booster blueprints + card UUID↔scryfallId bridge
+  2. MTGJSON SetList.json → sets with sealed products + release dates
+  3. Per-set MTGJSON (cached permanently) → booster blueprints + card UUID bridge
   4. Build global {mtgjson_uuid: (usd, usd_foil)} dict
   5. Recursively value each sealed product:
-       booster_box → contents.sealed (N packs) → contents.pack → blueprint
-       bundle      → contents.sealed + contents.card
+       booster_box  → contents.sealed (N packs) → contents.pack → blueprint
+       bundle       → contents.sealed + contents.card
        booster_pack → contents.pack → blueprint
-  6. Write floor/EV/ceiling to sealed_products table
+       deck/precon  → contents.deck (named deck list in set file) + contents.sealed
+  6. Write floor/EV/ceiling + purchase URLs to sealed_products table
 
 Definitions:
   floor_usd   = guaranteed minimum (worst-case pull from each booster slot)
@@ -30,11 +31,13 @@ from typing import Optional
 import httpx
 
 from . import db
+from .db import DB_PATH
 
 log = logging.getLogger(__name__)
 
-_PKG = Path(__file__).resolve().parent
-DATA_DIR = _PKG.parent.parent.parent / "data"
+# Cache lives alongside the DB so paths stay consistent regardless of how the
+# package is invoked.
+DATA_DIR = DB_PATH.parent          # .../mtg-watchdog/data/
 CACHE_DIR = DATA_DIR / "cache"
 
 UA = {
@@ -51,14 +54,16 @@ FOCUS_CATEGORIES = {
     "booster_box",
     "booster_pack",
     "bundle",
-    "commander_deck",
-    "prerelease_pack",
-    "draft_set",
+    "deck",           # commander precons + challenger decks
+    "multiple_decks", # starter kits (two decks in one box)
 }
 
-# Categories we store but exclude from the top-N ranking display
-_ALL_INGEST_CATEGORIES = FOCUS_CATEGORIES | {
-    "booster_case", "bundle_case", "multiple_decks", "deck_box",
+CATEGORY_LABELS = {
+    "booster_box":    "Booster Box",
+    "booster_pack":   "Booster Pack",
+    "bundle":         "Bundle",
+    "deck":           "Precon Deck",
+    "multiple_decks": "Deck Set",
 }
 
 
@@ -115,7 +120,7 @@ def download_set_list(force: bool = False) -> Path:
 
 
 def download_set(set_code: str) -> Path:
-    """Per-set files are cached permanently — released sets don't change."""
+    """Per-set files cached permanently — released sets don't change."""
     target = CACHE_DIR / f"set_{set_code.upper()}.json"
     if target.exists():
         return target
@@ -125,7 +130,7 @@ def download_set(set_code: str) -> Path:
         _stream_download(url, target)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
-            target.write_text("{}")  # stub so we don't retry
+            target.write_text("{}")
         else:
             raise
     return target
@@ -136,7 +141,6 @@ def download_set(set_code: str) -> Path:
 # ---------------------------------------------------------------------------
 
 def _iter_json_array(path: Path):
-    """Stream a top-level JSON array using ijson when available."""
     try:
         import ijson  # type: ignore
         with path.open("rb") as f:
@@ -168,8 +172,7 @@ def load_scryfall_prices(path: Path) -> dict[str, tuple]:
 
 
 def load_set_list(path: Path) -> list[dict]:
-    """Return [{code, name, releaseDate, sealedProduct: [...]}] filtered to sets
-    that have sealed products and were released after CUTOFF_DATE."""
+    """Sets that have sealed products and were released after CUTOFF_DATE."""
     with path.open("rb") as f:
         doc = json.load(f)
     sets = doc.get("data", [])
@@ -191,12 +194,7 @@ def load_set_file(set_code: str) -> dict:
 # Build UUID price lookup across all sets
 # ---------------------------------------------------------------------------
 
-def build_uuid_prices(
-    set_data: dict,
-    scryfall_prices: dict,
-    into: dict,
-) -> None:
-    """Add {mtgjson_uuid: (usd, usd_foil)} entries into `into` for cards in set_data."""
+def build_uuid_prices(set_data: dict, scryfall_prices: dict, into: dict) -> None:
     for card in set_data.get("cards", []) or []:
         uuid = card.get("uuid")
         if not uuid:
@@ -258,12 +256,9 @@ def _value_booster_blueprint(blueprint: dict, uuid_prices: dict) -> _Val:
     sheets = blueprint.get("sheets") or {}
     total_w = sum(b.get("weight", 1) for b in configs) or 1
 
-    ev = 0.0
-    floor = 0.0
-    ceiling = 0.0
+    ev = floor = ceiling = 0.0
     count = 0
     first = True
-
     for cfg in configs:
         w = cfg.get("weight", 1) / total_w
         cfg_ev = cfg_floor = cfg_ceiling = 0.0
@@ -276,23 +271,42 @@ def _value_booster_blueprint(blueprint: dict, uuid_prices: dict) -> _Val:
             cfg_ceiling += s_ceiling * slots
             cfg_count += slots
         ev += w * cfg_ev
-        if first:
-            floor = cfg_floor
-            first = False
-        else:
-            floor = min(floor, cfg_floor)
+        floor = cfg_floor if first else min(floor, cfg_floor)
         ceiling = max(ceiling, cfg_ceiling)
         count = max(count, cfg_count)
+        first = False
 
     return _Val(ev=ev, floor=floor, ceiling=ceiling, count=count, kind="probabilistic")
+
+
+def _value_deck(deck_name: str, deck_set: str, set_cache: dict, uuid_prices: dict) -> _Val:
+    """Value a named preconstructed deck from the set's decks array."""
+    set_data = set_cache.get(deck_set, {})
+    total = _Val()
+    for deck in set_data.get("decks", []) or []:
+        if deck.get("name") != deck_name:
+            continue
+        for section in ("mainBoard", "sideBoard", "commander"):
+            for c in deck.get(section, []) or []:
+                uuid = c.get("uuid")
+                qty = int(c.get("count", 1) or 1)
+                foil = bool(c.get("isFoil") or c.get("foil"))
+                if not uuid:
+                    continue
+                usd, usd_foil = uuid_prices.get(uuid, (0.0, 0.0))
+                price = usd_foil if foil else usd
+                total += _Val(ev=price * qty, floor=price * qty,
+                              ceiling=price * qty, count=qty)
+        break
+    return total
 
 
 def _value_contents(
     contents: dict,
     default_set_code: str,
-    set_cache: dict,        # set_code -> parsed MTGJSON set data
-    uuid_prices: dict,      # global mtgjson_uuid -> (usd, usd_foil)
-    sealed_by_uuid: dict,   # uuid -> {contents, set_code}
+    set_cache: dict,
+    uuid_prices: dict,
+    all_products: dict,  # uuid -> product info (for sealed refs)
     depth: int = 0,
 ) -> _Val:
     if depth > 6 or not contents:
@@ -300,7 +314,7 @@ def _value_contents(
 
     total = _Val()
 
-    # 1. Explicit fixed card inclusions (promos, Secret Lair singles, etc.)
+    # 1. Explicit fixed cards (promos, bundle extras, etc.)
     for c in contents.get("card", []) or []:
         uuid = c.get("uuid")
         qty = int(c.get("count", 1) or 1)
@@ -311,7 +325,15 @@ def _value_contents(
         price = usd_foil if foil else usd
         total += _Val(ev=price * qty, floor=price * qty, ceiling=price * qty, count=qty)
 
-    # 2. Direct booster blueprint references (booster_pack → this is the pack itself)
+    # 2. Named deck lists (commander precons, challenger decks, etc.)
+    for d in contents.get("deck", []) or []:
+        deck_name = d.get("name", "")
+        deck_set = (d.get("set") or default_set_code).upper()
+        qty = int(d.get("count", 1) or 1)
+        deck_val = _value_deck(deck_name, deck_set, set_cache, uuid_prices)
+        total += deck_val.scale(qty)
+
+    # 3. Direct booster blueprint references (booster_pack → blueprint)
     for pack in contents.get("pack", []) or []:
         pack_set = (pack.get("set") or default_set_code).upper()
         pack_data = set_cache.get(pack_set, {})
@@ -326,24 +348,21 @@ def _value_contents(
         if not blueprint:
             continue
         qty = int(pack.get("count", 1) or 1)
-        pack_val = _value_booster_blueprint(blueprint, uuid_prices)
-        total += pack_val.scale(qty)
+        total += _value_booster_blueprint(blueprint, uuid_prices).scale(qty)
 
-    # 3. Nested sealed references (box → N packs, bundle → packs + card)
+    # 4. Nested sealed references (box → N packs, bundle → packs, etc.)
     for s in contents.get("sealed", []) or []:
         child_uuid = s.get("uuid")
         qty = int(s.get("count", 1) or 1)
         if not child_uuid:
             continue
-        child = sealed_by_uuid.get(child_uuid)
+        child = all_products.get(child_uuid)
         if not child:
             continue
         child_val = _value_contents(
             child.get("contents") or {},
             (child.get("set_code") or default_set_code).upper(),
-            set_cache,
-            uuid_prices,
-            sealed_by_uuid,
+            set_cache, uuid_prices, all_products,
             depth=depth + 1,
         )
         total += child_val.scale(qty)
@@ -352,11 +371,32 @@ def _value_contents(
 
 
 # ---------------------------------------------------------------------------
+# Purchase URL helpers
+# ---------------------------------------------------------------------------
+
+def _purchase_urls(product: dict) -> tuple[Optional[str], Optional[str]]:
+    """Return (tcgplayer_url, card_kingdom_url) for a SetList sealedProduct entry."""
+    pu = product.get("purchaseUrls") or {}
+    ids = product.get("identifiers") or {}
+
+    tcg = pu.get("tcgplayer") or None
+    # Fall back to constructing direct TCGPlayer URL from product ID
+    if not tcg:
+        tcg_id = ids.get("tcgplayerProductId")
+        if tcg_id:
+            tcg = f"https://www.tcgplayer.com/product/{tcg_id}"
+
+    ck_id = ids.get("cardKingdomId")
+    ck = f"https://www.cardkingdom.com/catalog/item/{ck_id}" if ck_id else None
+
+    return tcg, ck
+
+
+# ---------------------------------------------------------------------------
 # Main sync entry point
 # ---------------------------------------------------------------------------
 
 def run_sync(force_download: bool = False) -> dict:
-    """Full nightly sealed-product sync. Returns stats dict."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     db.init_db()
 
@@ -365,20 +405,17 @@ def run_sync(force_download: bool = False) -> dict:
     # --- Step 1: Scryfall bulk prices ---
     log.info("=== Step 1/4: Scryfall bulk prices ===")
     bulk_path = download_scryfall_bulk(force=force_download)
-    log.info("Loading prices...")
     scryfall_prices = load_scryfall_prices(bulk_path)
     stats["scryfall_cards"] = len(scryfall_prices)
 
-    # --- Step 2: SetList → which sets have sealed products ---
+    # --- Step 2: SetList → product catalogue ---
     log.info("=== Step 2/4: SetList ===")
     set_list_path = download_set_list(force=force_download)
     sets_with_sealed = load_set_list(set_list_path)
     log.info("Sets with sealed products since %s: %d", CUTOFF_DATE, len(sets_with_sealed))
 
-    # Build the full catalogue of sealed products from SetList
-    # (SetList already has category/uuid/name/contents for each product)
-    all_products: dict[str, dict] = {}  # uuid -> product info
-    set_meta: dict[str, dict] = {}      # code -> {name, releaseDate}
+    all_products: dict[str, dict] = {}
+    set_meta: dict[str, dict] = {}
     for s in sets_with_sealed:
         code = s["code"].upper()
         set_meta[code] = {"name": s["name"], "release_date": s.get("releaseDate")}
@@ -386,6 +423,7 @@ def run_sync(force_download: bool = False) -> dict:
             uuid = p.get("uuid")
             if not uuid:
                 continue
+            tcg_url, ck_url = _purchase_urls(p)
             all_products[uuid] = {
                 "uuid": uuid,
                 "name": p.get("name", ""),
@@ -393,15 +431,17 @@ def run_sync(force_download: bool = False) -> dict:
                 "category": p.get("category"),
                 "release_date": p.get("releaseDate") or s.get("releaseDate"),
                 "contents": p.get("contents") or {},
+                "tcgplayer_url": tcg_url,
+                "card_kingdom_url": ck_url,
             }
 
-    log.info("Total sealed products in catalogue: %d", len(all_products))
+    log.info("Total products in catalogue: %d", len(all_products))
     stats["products_in_catalogue"] = len(all_products)
 
-    # --- Step 3: Per-set MTGJSON data ---
+    # --- Step 3: Per-set MTGJSON ---
     log.info("=== Step 3/4: Per-set MTGJSON data (%d sets) ===", len(sets_with_sealed))
     set_cache: dict[str, dict] = {}
-    uuid_prices: dict[str, tuple] = {}  # global mtgjson_uuid -> (usd, usd_foil)
+    uuid_prices: dict[str, tuple] = {}
 
     for i, s in enumerate(sets_with_sealed, 1):
         code = s["code"].upper()
@@ -410,22 +450,20 @@ def run_sync(force_download: bool = False) -> dict:
             set_cache[code] = set_data
             build_uuid_prices(set_data, scryfall_prices, into=uuid_prices)
             if i % 30 == 0:
-                log.info("  sets loaded: %d/%d (uuid_prices: %d)",
-                         i, len(sets_with_sealed), len(uuid_prices))
+                log.info("  sets: %d/%d  uuid_prices: %d", i, len(sets_with_sealed), len(uuid_prices))
         except Exception:
             log.exception("Failed to load set %s", code)
             set_cache[code] = {}
 
-    log.info("UUID prices built: %d cards", len(uuid_prices))
+    log.info("UUID prices: %d cards", len(uuid_prices))
     stats["sets_loaded"] = len(set_cache)
 
     # --- Step 4: Compute valuations ---
-    log.info("=== Step 4/4: Computing valuations ===")
-    focus = {
-        uuid: p for uuid, p in all_products.items()
-        if p.get("category") in FOCUS_CATEGORIES
-    }
-    log.info("Products to value: %d (category filter: %s)", len(focus), sorted(FOCUS_CATEGORIES))
+    log.info("=== Step 4/4: Valuations ===")
+    focus = {uuid: p for uuid, p in all_products.items()
+             if p.get("category") in FOCUS_CATEGORIES}
+    log.info("Products to value: %d (categories: %s)",
+             len(focus), sorted(FOCUS_CATEGORIES))
 
     written = errors = skipped = 0
     for uuid, p in focus.items():
@@ -435,9 +473,7 @@ def run_sync(force_download: bool = False) -> dict:
             skipped += 1
             continue
         try:
-            val = _value_contents(
-                contents, code, set_cache, uuid_prices, all_products
-            )
+            val = _value_contents(contents, code, set_cache, uuid_prices, all_products)
         except Exception:
             log.exception("Valuation failed for %s (%s)", p["name"], uuid)
             errors += 1
@@ -456,6 +492,8 @@ def run_sync(force_download: bool = False) -> dict:
             "ceiling_usd": round(val.ceiling, 2) if val.ceiling else None,
             "card_count": val.count or None,
             "valuation_kind": val.kind,
+            "tcgplayer_url": p.get("tcgplayer_url"),
+            "card_kingdom_url": p.get("card_kingdom_url"),
             "updated_at": db.now_iso(),
         })
         written += 1

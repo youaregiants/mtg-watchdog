@@ -50,18 +50,20 @@ CREATE INDEX IF NOT EXISTS idx_history_card ON price_history(scryfall_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_card  ON alerts(scryfall_id);
 
 CREATE TABLE IF NOT EXISTS sealed_products (
-    uuid          TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    set_code      TEXT NOT NULL,
-    set_name      TEXT,
-    category      TEXT,
-    release_date  TEXT,
-    floor_usd     REAL,
-    ev_usd        REAL,
-    ceiling_usd   REAL,
-    card_count    INTEGER,
-    valuation_kind TEXT,
-    updated_at    TEXT NOT NULL
+    uuid              TEXT PRIMARY KEY,
+    name              TEXT NOT NULL,
+    set_code          TEXT NOT NULL,
+    set_name          TEXT,
+    category          TEXT,
+    release_date      TEXT,
+    floor_usd         REAL,
+    ev_usd            REAL,
+    ceiling_usd       REAL,
+    card_count        INTEGER,
+    valuation_kind    TEXT,
+    tcgplayer_url     TEXT,
+    card_kingdom_url  TEXT,
+    updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sealed_floor    ON sealed_products(floor_usd DESC);
 CREATE INDEX IF NOT EXISTS idx_sealed_category ON sealed_products(category);
@@ -76,6 +78,12 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Idempotent column migrations for sealed_products
+        for col in ("tcgplayer_url TEXT", "card_kingdom_url TEXT"):
+            try:
+                conn.execute(f"ALTER TABLE sealed_products ADD COLUMN {col}")
+            except Exception:
+                pass
 
 
 @contextmanager
@@ -282,14 +290,19 @@ def upsert_sealed_product(row: dict) -> None:
             """
             INSERT INTO sealed_products
               (uuid, name, set_code, set_name, category, release_date,
-               floor_usd, ev_usd, ceiling_usd, card_count, valuation_kind, updated_at)
+               floor_usd, ev_usd, ceiling_usd, card_count, valuation_kind,
+               tcgplayer_url, card_kingdom_url, updated_at)
             VALUES (:uuid, :name, :set_code, :set_name, :category, :release_date,
-               :floor_usd, :ev_usd, :ceiling_usd, :card_count, :valuation_kind, :updated_at)
+               :floor_usd, :ev_usd, :ceiling_usd, :card_count, :valuation_kind,
+               :tcgplayer_url, :card_kingdom_url, :updated_at)
             ON CONFLICT(uuid) DO UPDATE SET
               name=excluded.name, set_name=excluded.set_name,
               floor_usd=excluded.floor_usd, ev_usd=excluded.ev_usd,
               ceiling_usd=excluded.ceiling_usd, card_count=excluded.card_count,
-              valuation_kind=excluded.valuation_kind, updated_at=excluded.updated_at
+              valuation_kind=excluded.valuation_kind,
+              tcgplayer_url=excluded.tcgplayer_url,
+              card_kingdom_url=excluded.card_kingdom_url,
+              updated_at=excluded.updated_at
             """,
             row,
         )

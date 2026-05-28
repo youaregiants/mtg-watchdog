@@ -132,12 +132,21 @@ form.search-form button:hover, .watch-form button:hover { filter: brightness(1.1
 .small { font-size: 12px; }
 .filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
 .pill-active { background: var(--accent); color: white; }
-.pill-booster_box  { background: rgba(59,130,246,.18); color: #93c5fd; }
-.pill-booster_pack { background: rgba(99,102,241,.18); color: #a5b4fc; }
-.pill-bundle       { background: rgba(16,185,129,.18); color: #6ee7b7; }
-.pill-commander_deck { background: rgba(245,158,11,.18); color: #fcd34d; }
-.pill-prerelease_pack { background: rgba(236,72,153,.18); color: #f9a8d4; }
-.pill-draft_set    { background: rgba(239,68,68,.18); color: #fca5a5; }
+.pill-booster_box    { background: rgba(59,130,246,.18); color: #93c5fd; }
+.pill-booster_pack   { background: rgba(99,102,241,.18); color: #a5b4fc; }
+.pill-bundle         { background: rgba(16,185,129,.18); color: #6ee7b7; }
+.pill-deck           { background: rgba(245,158,11,.18); color: #fcd34d; }
+.pill-multiple_decks { background: rgba(236,72,153,.18); color: #f9a8d4; }
+
+.buy-links { white-space: nowrap; }
+.buy-pill {
+  display: inline-block; padding: 2px 7px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; text-decoration: none;
+  margin-right: 3px; letter-spacing: 0.3px;
+}
+.buy-pill:hover { filter: brightness(1.2); text-decoration: none; }
+.buy-pill.tcg { background: rgba(59,130,246,.22); color: #93c5fd; border: 1px solid rgba(59,130,246,.35); }
+.buy-pill.ck  { background: rgba(245,158,11,.22); color: #fcd34d; border: 1px solid rgba(245,158,11,.35); }
 .sealed-table .product-name { font-weight: 500; max-width: 280px; }
 .sealed-table .small { font-size: 12px; }
 .floor-val { font-weight: 600; }
