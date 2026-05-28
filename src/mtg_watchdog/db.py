@@ -48,6 +48,23 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 CREATE INDEX IF NOT EXISTS idx_history_card ON price_history(scryfall_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_card  ON alerts(scryfall_id);
+
+CREATE TABLE IF NOT EXISTS sealed_products (
+    uuid          TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    set_code      TEXT NOT NULL,
+    set_name      TEXT,
+    category      TEXT,
+    release_date  TEXT,
+    floor_usd     REAL,
+    ev_usd        REAL,
+    ceiling_usd   REAL,
+    card_count    INTEGER,
+    valuation_kind TEXT,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sealed_floor    ON sealed_products(floor_usd DESC);
+CREATE INDEX IF NOT EXISTS idx_sealed_category ON sealed_products(category);
 """
 
 
@@ -255,3 +272,56 @@ def unseen_alert_count() -> int:
     with connect() as conn:
         row = conn.execute("SELECT COUNT(*) AS c FROM alerts WHERE seen = 0").fetchone()
         return row["c"] if row else 0
+
+
+# --- sealed products -------------------------------------------------------
+
+def upsert_sealed_product(row: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO sealed_products
+              (uuid, name, set_code, set_name, category, release_date,
+               floor_usd, ev_usd, ceiling_usd, card_count, valuation_kind, updated_at)
+            VALUES (:uuid, :name, :set_code, :set_name, :category, :release_date,
+               :floor_usd, :ev_usd, :ceiling_usd, :card_count, :valuation_kind, :updated_at)
+            ON CONFLICT(uuid) DO UPDATE SET
+              name=excluded.name, set_name=excluded.set_name,
+              floor_usd=excluded.floor_usd, ev_usd=excluded.ev_usd,
+              ceiling_usd=excluded.ceiling_usd, card_count=excluded.card_count,
+              valuation_kind=excluded.valuation_kind, updated_at=excluded.updated_at
+            """,
+            row,
+        )
+
+
+def list_sealed_top(category: Optional[str] = None, limit: int = 100) -> list[sqlite3.Row]:
+    with connect() as conn:
+        if category:
+            return list(conn.execute(
+                "SELECT * FROM sealed_products WHERE category=? AND floor_usd > 0 "
+                "ORDER BY floor_usd DESC LIMIT ?",
+                (category, limit),
+            ))
+        return list(conn.execute(
+            "SELECT * FROM sealed_products WHERE floor_usd > 0 "
+            "ORDER BY floor_usd DESC LIMIT ?",
+            (limit,),
+        ))
+
+
+def sealed_categories() -> list[str]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT category FROM sealed_products "
+            "WHERE floor_usd > 0 ORDER BY category"
+        ).fetchall()
+        return [r["category"] for r in rows if r["category"]]
+
+
+def sealed_last_synced() -> Optional[str]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT MAX(updated_at) AS t FROM sealed_products"
+        ).fetchone()
+        return row["t"] if row else None

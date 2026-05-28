@@ -5,16 +5,20 @@ import argparse
 import json
 import sys
 
-from . import db, refresh, scryfall, seed
+from . import db, refresh, scryfall
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mtg-watchdog", description="MTG card price watchdog")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("init", help="Initialise the database (and seed demo data)")
+    sub.add_parser("init", help="Initialise the database")
     sub.add_parser("refresh", help="Refresh prices for every watched card")
     sub.add_parser("list", help="Print every watched card and its latest price")
+
+    ss_sync = sub.add_parser("sync-sealed", help="Download Scryfall + MTGJSON data and compute sealed EV")
+    ss_sync.add_argument("--force", action="store_true",
+                         help="Re-download cached files even if they exist")
 
     sa = sub.add_parser("add", help="Add a card to the watchlist (by Scryfall query)")
     sa.add_argument("query", help='e.g. "Lightning Bolt set:lea"')
@@ -32,8 +36,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "init":
         db.init_db()
-        n = seed.seed()
-        print(f"DB ready. Seeded {n} demo cards.")
+        print("DB ready.")
         return 0
 
     if args.cmd == "refresh":
@@ -45,6 +48,15 @@ def main(argv: list[str] | None = None) -> int:
         for w in db.list_watches():
             print(f"{w['scryfall_id']:20} {w['name'][:30]:30} {w['set_code']:6} "
                   f"usd={w['usd']}  atl={w['atl_usd']}")
+        return 0
+
+    if args.cmd == "sync-sealed":
+        import logging
+        logging.basicConfig(level=logging.INFO,
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        from . import sealed_sync
+        stats = sealed_sync.run_sync(force_download=args.force)
+        print(json.dumps(stats, indent=2))
         return 0
 
     if args.cmd == "add":

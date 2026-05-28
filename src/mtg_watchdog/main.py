@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, refresh, scryfall, seed
+from . import db, refresh, scryfall
 
 log = logging.getLogger("mtg_watchdog")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -26,15 +26,12 @@ TEMPLATES.env.cache = None  # workaround: jinja LRU cache + py3.14 raises in thr
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    inserted = seed.seed()
-    if inserted:
-        log.info("Seeded %d demo cards", inserted)
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(refresh.refresh_all, "interval", hours=12,
                       id="refresh-all", max_instances=1, coalesce=True)
     scheduler.start()
     app.state.scheduler = scheduler
-    log.info("Scheduler started (refresh every 12h)")
+    log.info("Scheduler started (price refresh every 12h)")
     try:
         yield
     finally:
@@ -110,7 +107,6 @@ def watch(scryfall_id: str = Form(...), target_price: Optional[str] = Form(None)
         except ValueError:
             tp = None
     db.add_watch(card, target_price=tp)
-    # also record the current price snapshot so charts start populated
     db.record_price(card["id"], card.get("prices") or {})
     return RedirectResponse(url=f"/card/{card['id']}", status_code=303)
 
@@ -147,6 +143,18 @@ def alerts(request: Request):
     rows = [dict(a) for a in db.list_alerts()]
     db.mark_alerts_seen()
     return TEMPLATES.TemplateResponse(request, "alerts.html", _ctx(alerts=rows))
+
+
+@app.get("/sealed", response_class=HTMLResponse)
+def sealed_page(request: Request, category: Optional[str] = None):
+    products = [dict(p) for p in db.list_sealed_top(category=category, limit=100)]
+    categories = db.sealed_categories()
+    last_synced = db.sealed_last_synced()
+    return TEMPLATES.TemplateResponse(
+        request, "sealed.html",
+        _ctx(products=products, categories=categories,
+             selected_category=category, last_synced=last_synced),
+    )
 
 
 # ---- helpers --------------------------------------------------------------

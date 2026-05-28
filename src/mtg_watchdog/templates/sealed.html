@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Sealed EV · mtg-watchdog{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>Sealed Product Value</h1>
+  <p class="muted">
+    Ranked by <strong>floor</strong> — the guaranteed minimum single-card value from opening the product,
+    based on the worst-case pull from each booster slot using current Scryfall prices.
+    EV = probability-weighted expected value. Ceiling = best possible pull.
+  </p>
+</div>
+
+{% if last_synced %}
+  <p class="muted small">Last synced: {{ last_synced[:19].replace('T',' ') }} UTC
+    &nbsp;·&nbsp; Next sync: nightly at 02:00 UTC
+    &nbsp;·&nbsp; <code>mtg-watchdog sync-sealed --force</code> to refresh now</p>
+{% else %}
+  <div class="empty-state">
+    <p>No sealed data yet. Run the initial sync:</p>
+    <pre>mtg-watchdog sync-sealed</pre>
+    <p class="muted small">First run downloads ~200 MB from Scryfall + MTGJSON and takes 5–15 minutes.</p>
+  </div>
+{% endif %}
+
+{% if categories %}
+<div class="filter-bar">
+  <span class="muted small">Filter:</span>
+  <a class="pill {% if not selected_category %}pill-active{% endif %}" href="/sealed">All</a>
+  {% for cat in categories %}
+  <a class="pill {% if selected_category == cat %}pill-active{% endif %}"
+     href="/sealed?category={{ cat }}">{{ cat.replace('_',' ') }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if products %}
+<table class="watch-table sealed-table">
+  <thead>
+    <tr>
+      <th class="num">#</th>
+      <th>Product</th>
+      <th>Set</th>
+      <th>Type</th>
+      <th class="num">Floor $</th>
+      <th class="num">EV $</th>
+      <th class="num">Ceiling $</th>
+      <th class="num">Cards</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in products %}
+    <tr>
+      <td class="num muted">{{ loop.index }}</td>
+      <td class="product-name">{{ p.name }}</td>
+      <td class="muted small">
+        <code>{{ p.set_code }}</code>
+        {% if p.set_name %}<span>· {{ p.set_name }}</span>{% endif %}
+        {% if p.release_date %}<span class="muted">· {{ p.release_date[:4] }}</span>{% endif %}
+      </td>
+      <td><span class="pill pill-{{ p.category or 'other' }}">{{ (p.category or 'other').replace('_',' ') }}</span></td>
+      <td class="num">
+        {% if p.floor_usd %}
+          <span class="floor-val {% if p.floor_usd >= 100 %}floor-high{% elif p.floor_usd >= 40 %}floor-mid{% endif %}">
+            ${{ "%.2f"|format(p.floor_usd) }}
+          </span>
+        {% else %}—{% endif %}
+      </td>
+      <td class="num">{% if p.ev_usd %}${{ "%.2f"|format(p.ev_usd) }}{% else %}—{% endif %}</td>
+      <td class="num muted">{% if p.ceiling_usd %}${{ "%.2f"|format(p.ceiling_usd) }}{% else %}—{% endif %}</td>
+      <td class="num muted">{{ p.card_count or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% elif last_synced %}
+  <p class="empty">No products matched the current filter.</p>
+{% endif %}
+{% endblock %}
